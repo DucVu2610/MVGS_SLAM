@@ -8,7 +8,6 @@ from mapping, keyframe selection, and loop retrieval.
 import argparse
 import csv
 import json
-import pickle
 import statistics
 import sys
 import time
@@ -25,6 +24,10 @@ if str(REPO_ROOT) not in sys.path:
 from src.entities.datasets import get_dataset
 from src.entities.logger import Logger
 from src.entities.loop_detection.feature_extractors import get_feature_extractor
+from src.utils.benchmark_utils import (
+    create_fresh_registration,
+    load_candidate_identities,
+)
 from src.utils.magic_slam_utils import Registration, register_submaps_depth
 from src.utils.utils import setup_seed
 
@@ -66,7 +69,8 @@ GAUSSIAN_LANDMARK_DEFAULTS = {
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", required=True, type=Path,
-                        help="Completed run containing config.yaml, loops.pkl, and agent_*/submaps")
+                        help=("Completed run containing config.yaml, "
+                              "detected_loops.pkl or loops.pkl, and agent_*/submaps"))
     parser.add_argument("--methods", nargs="+", choices=SUPPORTED_METHODS,
                         default=list(SUPPORTED_METHODS))
     parser.add_argument("--output-dir", type=Path,
@@ -93,16 +97,15 @@ def parse_args():
     return parser.parse_args()
 
 
+def fresh_registration(loop):
+    """Copy only candidate identity fields into a clean registration record."""
+    return create_fresh_registration(loop, Registration)
+
+
 def load_run(run_dir):
     with open(run_dir / "config.yaml", "r") as input_file:
         config = yaml.safe_load(input_file)
-    with open(run_dir / "loops.pkl", "rb") as input_file:
-        all_loops = pickle.load(input_file)
-
-    inter_loops = [loop for loop in all_loops
-                   if loop.source_agent_id != loop.target_agent_id]
-    if not inter_loops:
-        raise RuntimeError(f"No inter-agent loops found in {run_dir / 'loops.pkl'}")
+    inter_loops, candidate_path = load_candidate_identities(run_dir)
 
     agents_submaps = {}
     for agent_id in config["data"]["agent_ids"]:
@@ -114,7 +117,7 @@ def load_run(run_dir):
             torch.load(path, map_location="cpu", weights_only=False)
             for path in checkpoint_paths
         ]
-    return config, agents_submaps, inter_loops
+    return config, agents_submaps, inter_loops, candidate_path
 
 
 def load_datasets(config):
@@ -138,17 +141,9 @@ def load_datasets(config):
     return datasets
 
 
-def fresh_registration(loop):
-    return Registration(
-        loop.source_agent_id,
-        loop.source_frame_id,
-        loop.target_agent_id,
-        loop.target_frame_id)
-
-
 def run_method(method, config, agents_submaps, candidate_loops, datasets,
                output_dir, feature_extractor, allow_fpfh_fallback, seed,
-               dino_corr_overrides=None):
+               candidate_source_file, dino_corr_overrides=None):
     setup_seed(seed)
     method_dir = output_dir / method / f"seed_{seed}"
     method_dir.mkdir(parents=True, exist_ok=True)
@@ -200,6 +195,7 @@ def run_method(method, config, agents_submaps, candidate_loops, datasets,
         "benchmark_wall_time_s": wall_time,
         "allow_fpfh_fallback": allow_fpfh_fallback,
         "seed": seed,
+        "candidate_source_file": candidate_source_file,
     })
     if base_method in {"dinov2", "gaussian_landmark"}:
         option_names = set(DINO_BASELINE_OPTIONS)
@@ -284,7 +280,8 @@ def main():
     output_dir = (args.output_dir or run_dir / "registration_benchmark").resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    config, agents_submaps, candidate_loops = load_run(run_dir)
+    config, agents_submaps, candidate_loops, candidate_path = load_run(run_dir)
+    print(f"Using candidate identities from {candidate_path}")
     datasets = load_datasets(config)
 
     feature_extractor = None
@@ -332,6 +329,7 @@ def main():
             summaries.append(run_method(
                 method, config, agents_submaps, candidate_loops, datasets,
                 output_dir, feature_extractor, args.allow_fpfh_fallback, seed,
+                candidate_source_file=candidate_path.name,
                 dino_corr_overrides=method_overrides))
     write_comparison(output_dir, summaries)
     print(f"\nComparison written to {output_dir / 'comparison.csv'}")

@@ -1,9 +1,5 @@
 import argparse
 
-from src.entities.magic_slam import MAGiCSLAM
-from src.utils.io_utils import load_config
-from src.utils.utils import setup_seed
-
 
 def get_args():
     parser = argparse.ArgumentParser(description='Arguments to SLAM pipeline')
@@ -94,6 +90,13 @@ def validate_registration_config(config):
 
 if __name__ == "__main__":
     args = get_args()
+
+    # Keep argument discovery usable before optional CUDA/SLAM dependencies are
+    # installed; real execution still imports and validates the full pipeline.
+    from src.entities.magic_slam import MAGiCSLAM
+    from src.utils.io_utils import load_config
+    from src.utils.utils import setup_seed
+
     config = load_config(args.config_path)
     config = update_config_with_args(config, args)
     config = validate_registration_config(config)

@@ -15,6 +15,7 @@ from src.utils.utils import find_submap, np2ptcloud, coarse_registration
 
 from argparse import ArgumentParser
 from src.entities.arguments import OptimizationParams
+from src.utils.pose_utils import apply_pose_correction
 
 import copy
 import time
@@ -179,29 +180,6 @@ def merge_submaps(agents_submaps: dict, agents_kf_ids: dict, agents_opt_kf_c2ws:
                 opt_rotations)
 
     return merged_map
-
-
-def apply_pose_correction(submap_optimized_poses: dict, agents_submaps: dict) -> dict:
-    """ Applies the pose correction to the keyframes of the agents.
-        The pose graph consists of the first poses of each sub-map.
-        After optimization, the correction between the optimized pose of a sub-map
-        is applied to all the keyframe poses within that sub-map.
-    Args:
-        submap_optimized_poses: The optimized poses of the submaps.
-        agents_submaps: The submaps of the agents.
-    Returns:
-        agents_corrected_kf_poses: A dictionary containing the corrected keyframe poses of the agents
-    """
-    agents_corrected_kf_poses = {}
-    for agent_id in sorted(agents_submaps.keys()):
-        opt_kf_poses = []
-        for i, submap in enumerate(agents_submaps[agent_id]):
-            submap_kf_ids = submap["keyframe_ids"] - submap["submap_start_frame_id"]
-            delta = submap_optimized_poses[agent_id][i] @ np.linalg.inv(submap["submap_c2ws"][0])
-            for pose in submap["submap_c2ws"][submap_kf_ids]:
-                opt_kf_poses.append(delta @ pose)
-        agents_corrected_kf_poses[agent_id] = np.array(opt_kf_poses)
-    return agents_corrected_kf_poses
 
 
 def register_submaps(agents_submaps: dict, registration: Registration):

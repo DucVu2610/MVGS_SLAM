@@ -16,6 +16,7 @@ from src.entities.loop_detection.loop_detector import LoopDetector
 from src.entities.pose_graph_adapter import PoseGraphAdapter
 from src.entities.gtsam_pose_graph import PoseGraphAdapter_gtsam
 from src.utils import vis_utils
+from src.utils.gpu_utils import build_agent_gpu_map
 from src.utils.io_utils import save_dict_to_json, save_dict_to_yaml
 from src.utils.magic_slam_utils import (apply_pose_correction, merge_submaps,
                                         refine_map, register_agents_submaps,
@@ -33,10 +34,19 @@ class MAGiCSLAM(object):
         self.multi_gpu = self.config["multi_gpu"]
         self.scene_name = self.config["data"]["scene_name"]
         self.agent_ids = np.array(self.config["data"]["agent_ids"])
+        self.agent_gpu_ids = (
+            build_agent_gpu_map(self.agent_ids, torch.cuda.device_count())
+            if self.multi_gpu else {}
+        )
         self.agents_submaps = {agent_id: [] for agent_id in self.agent_ids}
         self.agents_messages = {agent_id: {} for agent_id in self.agent_ids}
         self.run_info = self._init_wandb()
-        self.agents = {agent_id: Agent(int(agent_id), self.run_info, self.config) for agent_id in self.agent_ids}
+        self.agents = {
+            agent_id: Agent(
+                int(agent_id), self.run_info, self.config,
+                gpu_id=self.agent_gpu_ids.get(int(agent_id)))
+            for agent_id in self.agent_ids
+        }
 
         self.input_path = Path(self.config["data"]["input_path"])
         self.output_path = Path(config["data"]["output_path"])
@@ -78,7 +88,7 @@ class MAGiCSLAM(object):
             pipe: The pipe to communicate with the agent.
         """
         if self.multi_gpu:
-            torch.cuda.set_device(int(agent_id) + 1)  # keep 0 for the main process
+            torch.cuda.set_device(self.agent_gpu_ids[int(agent_id)])
         self.agents[agent_id].set_pipe(pipe)
         self.agents[agent_id].run()
 

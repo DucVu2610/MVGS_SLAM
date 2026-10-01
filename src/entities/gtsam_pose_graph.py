@@ -244,19 +244,25 @@ class PoseGraphAdapter_gtsam(object):
         print(f"Optimization completed with final error: {final_error}")
 
     def get_poses(self) -> dict:
-        """ Returns the optimized poses for all agents.
+        """Return the current pose estimate for all agents.
+
+        If no loop survives filtering, the caller intentionally skips
+        :meth:`optimize`.  In that case the initial submap poses are the correct
+        result: applying them produces an identity correction for every submap.
+
         Returns:
             optimized_poses: The optimized poses for all agents (agent_id: str, poses: np.ndarray of shape (n, 4, 4)).
         """
-        if self.result is None:
-            raise RuntimeError("Graph has not been optimized yet. Call optimize() first.")
-        
+        pose_values = (
+            self.result if self.result is not None else self.initial_estimate
+        )
+
         optimized_poses = {}
         for agent_id in sorted(self.agents_submaps.keys()):
             agent_poses = []
             for submap in self.agents_submaps[agent_id]:
                 vertex_id = self.graph_info[(agent_id, submap["submap_start_frame_id"])]
-                optimized_pose = self.result.atPose3(vertex_id)
+                optimized_pose = pose_values.atPose3(vertex_id)
                 agent_poses.append(gtsam_pose3_to_numpy(optimized_pose))
             optimized_poses[agent_id] = np.array(agent_poses)
         return optimized_poses
