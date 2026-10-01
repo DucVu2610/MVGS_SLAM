@@ -6,6 +6,21 @@ from pathlib import Path
 from typing import Callable, List, Tuple
 
 
+GAUSSIAN_LANDMARK_DEFAULTS = {
+    "dino_min_similarity": -1.0,
+    "dino_min_margin": -1.0,
+    "dino_keep_top_fraction": 1.0,
+    "dino_depth_window_radius": 0,
+    "dino_depth_max_mad_m": None,
+    "dino_compatibility_threshold_m": 0.0,
+    "dino_min_compatibility_support": 0,
+    "gaussian_min_opacity": 0.05,
+    "gaussian_depth_tolerance_m": 0.05,
+    "gaussian_max_landmarks": 2048,
+    "gaussian_refit_inliers": True,
+}
+
+
 @dataclass(frozen=True)
 class RegistrationCandidate:
     """Only the identity of a detected inter-agent registration query."""
@@ -24,6 +39,30 @@ def create_fresh_registration(candidate, registration_factory: Callable):
         candidate.target_agent_id,
         candidate.target_frame_id,
     )
+
+
+def resolve_gaussian_registration_options(
+        config_options=None, explicit_overrides=None):
+    """Resolve Gaussian benchmark options with defaults < config < CLI."""
+    options = dict(GAUSSIAN_LANDMARK_DEFAULTS)
+    options.update(config_options or {})
+    options.update(explicit_overrides or {})
+    return options
+
+
+def build_gaussian_cli_overrides(args):
+    """Return only Gaussian options explicitly supplied on the command line."""
+    overrides = {}
+    if getattr(args, "no_gaussian_refit_inliers", False):
+        overrides["gaussian_refit_inliers"] = False
+    for argument_name, option_name in (
+            ("gaussian_min_opacity", "gaussian_min_opacity"),
+            ("gaussian_depth_tolerance_m", "gaussian_depth_tolerance_m"),
+            ("gaussian_max_landmarks", "gaussian_max_landmarks")):
+        value = getattr(args, argument_name, None)
+        if value is not None:
+            overrides[option_name] = value
+    return overrides
 
 
 def load_candidate_identities(

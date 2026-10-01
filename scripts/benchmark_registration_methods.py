@@ -25,8 +25,11 @@ from src.entities.datasets import get_dataset
 from src.entities.logger import Logger
 from src.entities.loop_detection.feature_extractors import get_feature_extractor
 from src.utils.benchmark_utils import (
+    GAUSSIAN_LANDMARK_DEFAULTS,
+    build_gaussian_cli_overrides,
     create_fresh_registration,
     load_candidate_identities,
+    resolve_gaussian_registration_options,
 )
 from src.utils.magic_slam_utils import Registration, register_submaps_depth
 from src.utils.utils import setup_seed
@@ -56,15 +59,6 @@ DINO_CORR_DEFAULTS = {
     "dino_compatibility_threshold_m": 0.05,
     "dino_min_compatibility_support": 8,
 }
-
-GAUSSIAN_LANDMARK_DEFAULTS = {
-    **DINO_BASELINE_OPTIONS,
-    "gaussian_min_opacity": 0.05,
-    "gaussian_depth_tolerance_m": 0.05,
-    "gaussian_max_landmarks": 2048,
-    "gaussian_refit_inliers": True,
-}
-
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -150,15 +144,16 @@ def run_method(method, config, agents_submaps, candidate_loops, datasets,
     logger = Logger(method_dir)
 
     base_method = "dinov2" if method in {"dinov2", "dinov2_corr"} else method
-    registration_options = dict(config["submap"].get("registration_options", {}))
+    config_options = config["submap"].get("registration_options", {})
+    registration_options = dict(config_options)
     if method == "dinov2":
         registration_options.update(DINO_BASELINE_OPTIONS)
     elif method == "dinov2_corr":
         registration_options.update(DINO_CORR_DEFAULTS)
         registration_options.update(dino_corr_overrides or {})
     elif method == "gaussian_landmark":
-        registration_options.update(GAUSSIAN_LANDMARK_DEFAULTS)
-        registration_options.update(dino_corr_overrides or {})
+        registration_options = resolve_gaussian_registration_options(
+            config_options, dino_corr_overrides)
 
     start = time.perf_counter()
     registrations = []
@@ -307,16 +302,7 @@ def main():
         if value is not None:
             dino_corr_overrides[option_name] = value
 
-    gaussian_overrides = {
-        "gaussian_refit_inliers": not args.no_gaussian_refit_inliers,
-    }
-    for argument_name, option_name in (
-            ("gaussian_min_opacity", "gaussian_min_opacity"),
-            ("gaussian_depth_tolerance_m", "gaussian_depth_tolerance_m"),
-            ("gaussian_max_landmarks", "gaussian_max_landmarks")):
-        value = getattr(args, argument_name)
-        if value is not None:
-            gaussian_overrides[option_name] = value
+    gaussian_overrides = build_gaussian_cli_overrides(args)
 
     summaries = []
     for method in args.methods:
