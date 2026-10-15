@@ -3,6 +3,28 @@
 import numpy as np
 
 
+def optimized_pose_for_keyframe(keyframe_ids, optimized_poses, frame_id, label=""):
+    """Return the optimized pose for one saved keyframe with strict ID checks."""
+    ids = np.asarray(keyframe_ids).reshape(-1).astype(np.int64, copy=False)
+    poses = np.asarray(optimized_poses, dtype=np.float64)
+    prefix = f"{label}: " if label else ""
+    if poses.ndim != 3 or poses.shape[1:] != (4, 4):
+        raise ValueError(f"{prefix}optimized poses must have shape [N, 4, 4]")
+    if len(ids) != len(poses):
+        raise ValueError(
+            f"{prefix}{len(ids)} keyframe IDs != {len(poses)} optimized poses")
+    if len(np.unique(ids)) != len(ids):
+        raise ValueError(f"{prefix}optimized keyframe IDs contain duplicates")
+    matches = np.flatnonzero(ids == int(frame_id))
+    if len(matches) != 1:
+        raise KeyError(
+            f"{prefix}keyframe {int(frame_id)} has {len(matches)} optimized poses")
+    pose = poses[int(matches[0])]
+    if not np.isfinite(pose).all():
+        raise ValueError(f"{prefix}optimized pose for keyframe {frame_id} is non-finite")
+    return pose
+
+
 def apply_pose_correction(
         submap_optimized_poses: dict, agents_submaps: dict) -> dict:
     """Apply each submap's start-pose correction to its keyframe poses."""

@@ -1,0 +1,77 @@
+inherit_from: configs/ReplicaMultiagent/office_0.yaml
+config_path: configs/magma/magma_multiview.yaml
+
+project_name: MAGMA-SLAM
+experiment_name: office0_magma_multiview
+
+submap:
+  anchor_data: render_depth
+  initial_transformation_unknown: true
+  PGO_GTSAM: true
+  registration_method: gaussian_landmark
+
+registration:
+  descriptor_mode: multiview  # baseline | single | multiview
+  max_landmarks: 512
+  min_observations: 2
+  gaussian_min_opacity: 0.05
+  gaussian_depth_tolerance_m: 0.05
+  depth_weight_temperature_m: 0.05
+  landmark_voxel_size_m: 0.05
+
+  similarity_threshold: -1.0
+  ambiguity_margin: 0.0
+  geometric_consistency: distance
+  compatibility_threshold_m: 0.03
+  min_compatibility_support: 16
+  min_correspondences: 8
+  min_ransac_inliers: 3
+  ransac_distance_threshold_m: 0.05
+  ransac_max_iterations: 700
+  ransac_min_iterations: 120
+  ransac_early_inlier_ratio: 0.82
+  ransac_early_median_m: 0.02
+  ransac_scoring: composite
+  prosac_sampling: true
+  ransac_tight_threshold_m: 0.03
+  refit_ransac_inliers: true
+  max_ransac_correspondences: 96
+  coverage_voxel_size_m: 0.10
+  max_per_source_voxel: 2
+  max_per_target_voxel: 2
+  hard_case_recovery: true
+  hard_case_top_k: 5
+  hard_case_min_inlier_ratio: 0.80
+  hard_case_min_tight_inlier_ratio: 0.70
+  hard_case_prefilter_max_correspondences: 180
+  hard_case_max_correspondences: 144
+  hard_case_max_per_source_voxel: 3
+  hard_case_max_per_target_voxel: 3
+  fallback_to_fpfh: false
+
+  refinement: point_to_plane_icp
+  icp_distance_threshold_m: 0.005
+  icp_max_iterations: 500
+  admission:
+    min_fitness: 0.30
+    max_rmse_m: 0.005
+
+global_compaction:
+  enabled: false
+  min_opacity: 0.05
+  voxel_size_m: 0.005
+  max_gaussians: 2000000
+  refine_iterations: 3000
+  prune_during_refinement: true
+  prune_min_opacity: 0.01
+  prune_interval: 100
+  prune_start_fraction: 0.20
+  prune_end_fraction: 0.80
+
+export:
+  tsdf:
+    enabled: false
+    voxel_size_m: 0.01
+    sdf_trunc_m: 0.04
+    depth_trunc_m: 5.0
+    frame_stride: 2

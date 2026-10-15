@@ -8,7 +8,7 @@ import torch
 
 from src.entities.loop_detection.feature_extractors import get_feature_extractor
 from src.utils.magic_slam_utils import Registration
-from src.utils.utils import find_submap
+from src.utils.submap_utils import find_submap
 
 # Mentioned here: https://github.com/pytorch/pytorch/issues/97207
 warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is deprecated')
@@ -172,6 +172,11 @@ class LoopDetector(object):
         """
         filtered_loops = []
         for loop in loops:
-            if loop.fitness > self.fitness_threshold and loop.inlier_rmse < self.inlier_rmse_threshold:
+            explicitly_admitted = getattr(loop, "accepted", None)
+            if explicitly_admitted is True:
+                filtered_loops.append(loop)
+            elif explicitly_admitted is None and (
+                    loop.fitness > self.fitness_threshold
+                    and loop.inlier_rmse < self.inlier_rmse_threshold):
                 filtered_loops.append(loop)
         return filtered_loops

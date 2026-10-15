@@ -1,5 +1,7 @@
 """ The MAGiCSLAM class that orchestrates the pipeline."""
 import time
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -92,6 +94,25 @@ class MAGiCSLAM(object):
         self.agents[agent_id].set_pipe(pipe)
         self.agents[agent_id].run()
 
+    def _export_tsdf_if_enabled(self) -> None:
+        options = self.config.get("export", {}).get("tsdf", {})
+        if not options.get("enabled", False):
+            return
+        exporter = Path(__file__).resolve().parents[2] / "tools" / "export_tsdf_mesh.py"
+        command = [
+            sys.executable, str(exporter),
+            "--slam-output", str(self.output_path),
+            "--voxel-size", str(options.get("voxel_size_m", 0.01)),
+            "--sdf-trunc", str(options.get("sdf_trunc_m", 0.04)),
+            "--depth-trunc", str(options.get("depth_trunc_m", 5.0)),
+            "--frame-stride", str(options.get("frame_stride", 2)),
+            "--min-component-triangles", str(
+                options.get("min_component_triangles", 1000)),
+        ]
+        if options.get("zip", False):
+            command.append("--zip")
+        subprocess.run(command, check=True)
+
     def optimize_poses(self, agents_submaps: dict) -> dict:
         """ Optimize the poses of the agents using the loop closure.
             Detects all the loops between the submaps, registers the loops, and optimizes the poses.
@@ -118,10 +139,25 @@ class MAGiCSLAM(object):
         vis_utils.plot_agents_pose_graph(agents_c2ws, {}, intra_loops, inter_loops,
                                          output_path=str(self.output_path / "all_loops.png"))
 
+        registration_config = dict(self.config.get("registration", {}))
+        descriptor_mode = str(
+            registration_config.get("descriptor_mode", "baseline")).lower()
         reg_method = self.config["submap"].get(
             "registration_method", "fpfh").lower()
-        fallback_to_fpfh = self.config["submap"].get(
-            "fallback_to_fpfh", True)
+        if descriptor_mode in {"single", "multiview"}:
+            reg_method = "gaussian_landmark"
+        fallback_to_fpfh = registration_config.get(
+            "fallback_to_fpfh",
+            self.config["submap"].get("fallback_to_fpfh", True))
+        registration_options = dict(
+            self.config["submap"].get("registration_options", {}))
+        registration_options.update(registration_config)
+        registration_options["descriptor_mode"] = descriptor_mode
+        if descriptor_mode != "baseline":
+            registration_options.setdefault("admission", {
+                "min_fitness": loop_detector.fitness_threshold,
+                "max_rmse_m": loop_detector.inlier_rmse_threshold,
+            })
 
         if self.config["submap"]["anchor_data"] == "pcd":
             intra_loops = register_agents_submaps(
@@ -130,18 +166,27 @@ class MAGiCSLAM(object):
                 agents_submaps, inter_loops, register_submaps, max_threads=20)
         elif self.config["submap"]["anchor_data"] in {"depth", "render_depth"}:
             init_unknown = self.config["submap"]["initial_transformation_unknown"]
+            agents_datasets = {
+                agent_id: self.agents[agent_id].dataset
+                for agent_id in self.agent_ids
+            }
+            landmark_cache = {}
             registration_extractor = None
             if reg_method in {"dinov2", "gaussian_landmark"}:
+                extractor_registration_config = dict(self.config["submap"])
+                extractor_registration_config.update(registration_config)
                 registration_extractor = get_patch_feature_extractor(
                     self.config["loop_detection"],
-                    self.config["submap"],
+                    extractor_registration_config,
                     loop_detector._feature_extractor)
             registration_fn = lambda s, r: register_submaps_depth(
                 s, r, init_unknown,
                 registration_method=reg_method,
                 feature_extractor=registration_extractor,
                 fallback_to_fpfh=fallback_to_fpfh,
-                registration_options=self.config["submap"].get("registration_options", {}))
+                registration_options=registration_options,
+                agents_datasets=agents_datasets,
+                landmark_cache=landmark_cache)
             intra_loops = register_agents_submaps_depth(
                 agents_submaps, intra_loops, registration_fn, max_threads=1)
             inter_loops = register_agents_submaps_depth(
@@ -153,11 +198,16 @@ class MAGiCSLAM(object):
         agents_datasets = {
             agent_id: self.agents[agent_id].dataset for agent_id in self.agent_ids
         }
+        admission = registration_options.get("admission", {})
         self.logger.log_registration_metrics(
             agents_datasets,
             inter_loops,
-            loop_detector.fitness_threshold,
-            loop_detector.inlier_rmse_threshold)
+            float(admission.get("min_fitness", loop_detector.fitness_threshold)),
+            float(admission.get("max_rmse_m", loop_detector.inlier_rmse_threshold)))
+
+        num_registration_failures = sum(
+            bool(getattr(loop, "failure_reason", None))
+            for loop in intra_loops + inter_loops)
 
         intra_loops = loop_detector.filter_loops(intra_loops)
         inter_loops = loop_detector.filter_loops(inter_loops)
@@ -166,11 +216,13 @@ class MAGiCSLAM(object):
         self.logger.log_loops(intra_loops + inter_loops, "filtered_loops.pkl")
         save_dict_to_json({
             "registration_method": reg_method,
+            "descriptor_mode": descriptor_mode,
             "fallback_to_fpfh": bool(fallback_to_fpfh),
             "num_detected_intra_loops": num_detected_intra_loops,
             "num_detected_inter_loops": num_detected_inter_loops,
             "num_filtered_intra_loops": len(intra_loops),
             "num_filtered_inter_loops": len(inter_loops),
+            "num_registration_failures": num_registration_failures,
         }, "loop_pipeline_summary.json", directory=self.output_path)
 
         if self.config["submap"]["PGO_GTSAM"]:
@@ -223,11 +275,14 @@ class MAGiCSLAM(object):
             agents_kf_ids[agent_id] = agents_kf_ids[agent_id].astype(int)
         opt_args = self.agents[0].mapper.opt
 
+        compaction_options = dict(self.config.get("global_compaction", {}))
         total_merge_time = 0
         start = time.time()
         merged_map = merge_submaps(
-            self.agents_submaps, agents_kf_ids, agents_opt_kf_c2ws, opt_args)
-        total_merge_time += time.time() - start
+            self.agents_submaps, agents_kf_ids, agents_opt_kf_c2ws, opt_args,
+            compaction_options=compaction_options)
+        merge_only_time = time.time() - start
+        total_merge_time += merge_only_time
 
         merged_map.save_ply(str(self.output_path / "merged_coarse.ply"))
 
@@ -244,9 +299,15 @@ class MAGiCSLAM(object):
                           directory=self.output_path)
 
         start = time.time()
+        refine_iterations = (
+            int(compaction_options.get("refine_iterations", 3000))
+            if compaction_options.get("enabled", False) else 3000)
         refined_map = refine_map(
-            merged_map, agents_datasets, agents_kf_ids, agents_opt_kf_c2ws, iterations=3000)
-        total_merge_time += time.time() - start
+            merged_map, agents_datasets, agents_kf_ids, agents_opt_kf_c2ws,
+            iterations=refine_iterations,
+            compaction_options=compaction_options)
+        refine_only_time = time.time() - start
+        total_merge_time += refine_only_time
 
         print(f"Total merge time: {total_merge_time}")
 
@@ -256,12 +317,24 @@ class MAGiCSLAM(object):
 
         save_dict_to_json({
             "registration_time": registration_time,
+            "merge_only_time_s": merge_only_time,
+            "refine_only_time_s": refine_only_time,
             "total_merge_time": total_merge_time,
             },
             "walltime_stats.json",
             directory=self.output_path)
 
         refined_map.save_ply(str(self.output_path / "merged_refined.ply"))
+        compaction_stats = {
+            "merge": getattr(merged_map, "compaction_stats", {}),
+            "refinement": getattr(refined_map, "refinement_stats", {}),
+            "merged_coarse_bytes": (self.output_path / "merged_coarse.ply").stat().st_size,
+            "merged_refined_bytes": (self.output_path / "merged_refined.ply").stat().st_size,
+        }
+        save_dict_to_json(
+            compaction_stats,
+            "gaussian_compaction_stats.json",
+            directory=self.output_path)
         print("Eval fine merged map")
         fine_psnr, fine_lpips, fine_ssim, fine_dl1 = eval_agents_rendering(
             refined_map, agents_datasets, agents_kf_ids, agents_opt_kf_c2ws)
@@ -287,6 +360,10 @@ class MAGiCSLAM(object):
                                "ssim": np.mean(np.array(novel_ssim)),
                                "depth_l1": np.mean(np.array(novel_dl1))},
                               "novel_render_metrics.json", directory=self.output_path)
+
+        # Export is intentionally last: optimized poses and both Gaussian maps
+        # already exist, and TSDF never participates in registration or PGO.
+        self._export_tsdf_if_enabled()
 
         if self.config["use_wandb"]:
             wandb.finish()

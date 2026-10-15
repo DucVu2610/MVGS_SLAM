@@ -15,18 +15,7 @@ import cv2
 from typing import Dict, Any
 
 import time
-def find_submap(frame_id: int, submaps: dict) -> dict:
-    """ Finds the submap that starts with the given frame ID.
-    Args:
-        frame_id: The frame ID to search for.
-        submaps: The dictionary of submaps to search in.
-    Returns:
-        The submap that contains the given frame ID.
-    """
-    for submap in submaps:
-        if submap["submap_start_frame_id"] <= frame_id < submap["submap_end_frame_id"]:
-            return submap
-    return None
+from src.utils.submap_utils import find_submap
 
 
 def setup_seed(seed: int) -> None:

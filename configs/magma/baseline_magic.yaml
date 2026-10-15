@@ -1,0 +1,18 @@
+inherit_from: configs/ReplicaMultiagent/office_0_baseline.yaml
+config_path: configs/magma/baseline_magic.yaml
+
+project_name: MAGMA-SLAM
+experiment_name: office0_magic_baseline
+
+# The baseline mode leaves the inherited MAGiC-SLAM registration, PGO,
+# mapping, merge, and refinement behavior unchanged.
+registration:
+  descriptor_mode: baseline
+  fallback_to_fpfh: true
+
+global_compaction:
+  enabled: false
+
+export:
+  tsdf:
+    enabled: false

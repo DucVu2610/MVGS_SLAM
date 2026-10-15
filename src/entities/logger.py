@@ -1,5 +1,6 @@
 """ This module includes the Logger class, which is responsible for logging for both Mapper and the Tracker """
 import csv
+import json
 import pickle
 from io import BytesIO
 from pathlib import Path
@@ -13,8 +14,10 @@ from PIL import Image
 
 from src.utils.io_utils import get_gpu_usage_by_id, save_dict_to_json
 from src.utils.tracking_eval import align_trajectories, compute_ate, pose_error
-from src.utils.utils import find_submap, geodesic_rotation_error_deg, torch2np_decorator
+from src.utils.submap_utils import find_submap
+from src.utils.utils import geodesic_rotation_error_deg, torch2np_decorator
 from src.utils.vis_utils import plot_trajectory
+from src.registration.icp_refinement import is_rigid_transform
 
 
 class Logger(object):
@@ -132,19 +135,37 @@ class Logger(object):
             target_pose = np.asarray(
                 agents_datasets[loop.target_agent_id].poses[loop.target_frame_id])
             reference = np.linalg.inv(target_pose) @ source_pose
-            rotation_error = geodesic_rotation_error_deg(
-                loop.transformation[:3, :3], reference[:3, :3])
-            translation_error = float(np.linalg.norm(
-                loop.transformation[:3, 3] - reference[:3, 3]) * 100.0)
-            success = bool(rotation_error < rotation_threshold_deg and
-                           translation_error < translation_threshold_cm)
-            passed_filter = bool(loop.fitness > fitness_threshold and
-                                 loop.inlier_rmse < inlier_rmse_threshold)
+            transformation = getattr(loop, "transformation", None)
+            valid_transform = is_rigid_transform(
+                transformation, atol=1e-3) if transformation is not None else False
+            registration_valid = bool(
+                not getattr(loop, "coarse_registration_failed", False)
+                and valid_transform
+                and (getattr(loop, "T_refined", None) is not None
+                     or getattr(loop, "accepted", None) is None))
+            rotation_error = (
+                geodesic_rotation_error_deg(
+                    transformation[:3, :3], reference[:3, :3])
+                if registration_valid else None)
+            translation_error = (
+                float(np.linalg.norm(
+                    transformation[:3, 3] - reference[:3, 3]) * 100.0)
+                if registration_valid else None)
+            success = bool(
+                registration_valid
+                and rotation_error < rotation_threshold_deg
+                and translation_error < translation_threshold_cm)
+            explicit_admission = getattr(loop, "accepted", None)
+            passed_filter = (
+                bool(explicit_admission) if explicit_admission is not None
+                else bool(loop.fitness > fitness_threshold and
+                          loop.inlier_rmse < inlier_rmse_threshold))
 
             coarse_transformation = getattr(loop, "coarse_transformation", None)
             coarse_rotation_error = None
             coarse_translation_error = None
-            if coarse_transformation is not None:
+            if (coarse_transformation is not None
+                    and is_rigid_transform(coarse_transformation, atol=1e-3)):
                 coarse_transformation = np.asarray(coarse_transformation)
                 coarse_rotation_error = geodesic_rotation_error_deg(
                     coarse_transformation[:3, :3], reference[:3, :3])
@@ -158,10 +179,27 @@ class Logger(object):
                 "target_frame_id": loop.target_frame_id,
                 "registration_method_requested": getattr(
                     loop, "registration_method_requested", None),
+                "descriptor_mode": getattr(loop, "descriptor_mode", None),
                 "coarse_method_used": getattr(loop, "coarse_method_used", None),
                 "fallback_used": bool(getattr(loop, "fallback_used", False)),
+                "hard_case_triggered": bool(getattr(
+                    loop, "fallback_triggered", False)),
+                "hard_case_selected": bool(getattr(
+                    loop, "fallback_selected", False)),
+                "selected_stage": getattr(loop, "selected_stage", None),
                 "coarse_registration_failed": bool(getattr(
                     loop, "coarse_registration_failed", False)),
+                "accepted": passed_filter,
+                "valid_estimate": registration_valid,
+                "failure_reason": getattr(loop, "failure_reason", None),
+                "T_init": (
+                    json.dumps(np.asarray(loop.T_init).tolist())
+                    if getattr(loop, "T_init", None) is not None else None),
+                "T_refined": (
+                    json.dumps(np.asarray(loop.T_refined).tolist())
+                    if getattr(loop, "T_refined", None) is not None else None),
+                "num_source_landmarks": getattr(loop, "num_source_landmarks", None),
+                "num_target_landmarks": getattr(loop, "num_target_landmarks", None),
                 "num_source_features": getattr(loop, "num_source_features", None),
                 "num_target_features": getattr(loop, "num_target_features", None),
                 "num_feature_matches": getattr(loop, "num_feature_matches", None),
@@ -175,6 +213,8 @@ class Logger(object):
                     loop, "num_geometry_consistent_correspondences", None),
                 "num_correspondences": getattr(loop, "num_correspondences", None),
                 "num_ransac_inliers": getattr(loop, "num_ransac_inliers", None),
+                "ransac_score": getattr(loop, "ransac_score", None),
+                "ransac_iterations": getattr(loop, "ransac_iterations", None),
                 "ransac_inlier_ratio": getattr(
                     loop, "ransac_inlier_ratio", None),
                 "correspondence_retention_ratio": getattr(
@@ -190,6 +230,12 @@ class Logger(object):
                 "match_margin_p90": getattr(loop, "match_margin_p90", None),
                 "mean_compatibility_support": getattr(
                     loop, "mean_compatibility_support", None),
+                "coverage_input_pairs": getattr(
+                    loop, "coverage_input_pairs", None),
+                "coverage_strict_pairs": getattr(
+                    loop, "coverage_strict_pairs", None),
+                "coverage_filled_pairs": getattr(
+                    loop, "coverage_filled_pairs", None),
                 "dino_min_similarity": getattr(loop, "dino_min_similarity", None),
                 "dino_min_margin": getattr(loop, "dino_min_margin", None),
                 "dino_keep_top_fraction": getattr(
@@ -244,20 +290,34 @@ class Logger(object):
                     loop, "gaussian_refit_inliers", None),
                 "coarse_registration_time_s": getattr(
                     loop, "coarse_registration_time", None),
+                "descriptor_runtime_s": getattr(loop, "descriptor_runtime_s", None),
+                "matching_runtime_s": getattr(loop, "matching_runtime_s", None),
+                "geometric_consistency_runtime_s": getattr(
+                    loop, "geometric_consistency_runtime_s", None),
+                "ransac_runtime_s": getattr(loop, "ransac_runtime_s", None),
                 "icp_registration_time_s": getattr(
                     loop, "icp_registration_time", None),
+                "initial_fitness": getattr(loop, "initial_fitness", None),
+                "initial_inlier_rmse": getattr(
+                    loop, "initial_inlier_rmse", None),
+                "icp_fitness_gain": getattr(loop, "icp_fitness_gain", None),
+                "icp_rmse_improvement_m": getattr(
+                    loop, "icp_rmse_improvement_m", None),
                 "coarse_rotation_error_deg": coarse_rotation_error,
                 "coarse_translation_error_cm": coarse_translation_error,
                 "fitness": float(loop.fitness),
                 "inlier_rmse": float(loop.inlier_rmse),
-                "rotation_error_deg": float(rotation_error),
+                "rotation_error_deg": (
+                    float(rotation_error) if rotation_error is not None else None),
                 "translation_error_cm": translation_error,
                 "icp_rotation_improvement_deg": (
                     coarse_rotation_error - float(rotation_error)
-                    if coarse_rotation_error is not None else None),
+                    if (coarse_rotation_error is not None
+                        and rotation_error is not None) else None),
                 "icp_translation_improvement_cm": (
                     coarse_translation_error - translation_error
-                    if coarse_translation_error is not None else None),
+                    if (coarse_translation_error is not None
+                        and translation_error is not None) else None),
                 "success": success,
                 "passed_filter": passed_filter,
                 "false_negative": success and not passed_filter,
@@ -320,8 +380,15 @@ class Logger(object):
             "mean_icp_translation_improvement_cm": mean_of(
                 "icp_translation_improvement_cm"),
             "mean_coarse_registration_time_s": mean_of("coarse_registration_time_s"),
+            "mean_descriptor_runtime_s": mean_of("descriptor_runtime_s"),
+            "mean_matching_runtime_s": mean_of("matching_runtime_s"),
+            "mean_geometric_consistency_runtime_s": mean_of(
+                "geometric_consistency_runtime_s"),
+            "mean_ransac_runtime_s": mean_of("ransac_runtime_s"),
             "mean_icp_registration_time_s": mean_of("icp_registration_time_s"),
             "num_passed_filter": sum(row["passed_filter"] for row in rows),
+            "num_accepted": sum(row["accepted"] for row in rows),
+            "num_rejected": sum(not row["accepted"] for row in rows),
             "num_coarse_failures": sum(row["coarse_registration_failed"] for row in rows),
             "num_fpfh_fallbacks": sum(row["fallback_used"] for row in rows),
             "num_false_negatives": sum(row["false_negative"] for row in rows),

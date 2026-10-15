@@ -20,6 +20,19 @@ def get_args():
             'sift', 'orb', 'akaze'],
         help='Override submap.registration_method for a comparable experiment run')
     parser.add_argument(
+        '--descriptor_mode', choices=['baseline', 'single', 'multiview'],
+        help='Select baseline, single-view, or multi-view Gaussian registration')
+    parser.add_argument(
+        '--max_landmarks', type=int, choices=[256, 512, 1024],
+        help='Landmark budget K for single/multiview ablations')
+    parser.add_argument(
+        '--ambiguity_margin', type=float,
+        help='Override the bidirectional Top-1/Top-2 descriptor margin')
+    parser.add_argument(
+        '--geometric_consistency',
+        choices=['none', 'distance', 'distance_scale', 'distance_scale_relative_axis'],
+        help='Select geometric-consistency ablation')
+    parser.add_argument(
         '--registration_device', choices=['cpu', 'cuda'],
         help='Device for DINO patch extraction during inter-agent registration')
     parser.add_argument(
@@ -28,6 +41,12 @@ def get_args():
     parser.add_argument(
         '--disable_fpfh_fallback', action='store_true',
         help='Do not fall back to FPFH when semantic coarse registration fails')
+    parser.add_argument(
+        '--enable_global_compaction', action='store_true',
+        help='Enable post-PGO Gaussian compaction and periodic refinement pruning')
+    parser.add_argument(
+        '--disable_global_compaction', action='store_true',
+        help='Disable post-PGO Gaussian compaction')
     return parser.parse_args()
 
 
@@ -53,6 +72,15 @@ def update_config_with_args(config, args):
         config["group_name"] = args.group_name
     if args.registration_method:
         config["submap"]["registration_method"] = args.registration_method
+    if getattr(args, "descriptor_mode", None):
+        config.setdefault("registration", {})["descriptor_mode"] = args.descriptor_mode
+    if getattr(args, "max_landmarks", None) is not None:
+        config.setdefault("registration", {})["max_landmarks"] = args.max_landmarks
+    if getattr(args, "ambiguity_margin", None) is not None:
+        config.setdefault("registration", {})["ambiguity_margin"] = args.ambiguity_margin
+    if getattr(args, "geometric_consistency", None):
+        config.setdefault("registration", {})["geometric_consistency"] = (
+            args.geometric_consistency)
     if args.registration_device:
         config["submap"]["registration_device"] = args.registration_device
     if args.registration_weights_path:
@@ -60,13 +88,32 @@ def update_config_with_args(config, args):
             args.registration_weights_path)
     if args.disable_fpfh_fallback:
         config["submap"]["fallback_to_fpfh"] = False
+        config.setdefault("registration", {})["fallback_to_fpfh"] = False
+    enable_compaction = getattr(args, "enable_global_compaction", False)
+    disable_compaction = getattr(args, "disable_global_compaction", False)
+    if enable_compaction and disable_compaction:
+        raise ValueError("global compaction cannot be both enabled and disabled")
+    if enable_compaction:
+        config.setdefault("global_compaction", {})["enabled"] = True
+    if disable_compaction:
+        config.setdefault("global_compaction", {})["enabled"] = False
     return config
 
 
 def validate_registration_config(config):
     """Fail early when the selected method cannot run in the SLAM path."""
     submap_config = config.setdefault("submap", {})
+    registration_config = config.setdefault("registration", {})
+    descriptor_mode = str(
+        registration_config.get("descriptor_mode", "baseline")).lower()
+    if descriptor_mode not in {"baseline", "single", "multiview"}:
+        raise ValueError(
+            "registration.descriptor_mode must be baseline, single, or multiview")
+    registration_config["descriptor_mode"] = descriptor_mode
+    if descriptor_mode in {"single", "multiview"}:
+        submap_config["registration_method"] = "gaussian_landmark"
     method = submap_config.get("registration_method", "fpfh").lower()
+    submap_config["registration_method"] = method
     supported = {
         "fpfh", "dinov2", "gaussian_landmark", "sift", "orb", "akaze"
     }
@@ -85,6 +132,8 @@ def validate_registration_config(config):
     submap_config.setdefault("PGO_GTSAM", True)
     submap_config.setdefault("fallback_to_fpfh", True)
     submap_config.setdefault("registration_options", {})
+    registration_config.setdefault(
+        "fallback_to_fpfh", submap_config["fallback_to_fpfh"])
     return config
 
 
