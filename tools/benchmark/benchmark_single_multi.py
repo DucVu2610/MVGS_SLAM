@@ -38,11 +38,11 @@ from src.registration.icp_refinement import (
 )
 from src.registration.multiview_descriptor import build_gaussian_landmark_descriptors
 from src.utils.benchmark_utils import load_candidate_identities
+from src.utils.dataset_utils import resolve_agent_input
 from src.utils.io_utils import load_config
 from tools.benchmark.protocol import (
     find_submap_index,
     landmark_view,
-    resolve_agent_input,
     summarize_trials,
     validate_finalized_pose_ids,
 )

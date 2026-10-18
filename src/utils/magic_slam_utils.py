@@ -226,6 +226,8 @@ def merge_submaps(agents_submaps: dict, agents_kf_ids: dict,
     merged_map = GaussianModel(0)
     merged_map.training_setup(opt_args)
     device = "cuda"
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
 
     merge_started = time.perf_counter()
     before_merge = sum(
@@ -275,6 +277,7 @@ def merge_submaps(agents_submaps: dict, agents_kf_ids: dict,
         "merge_runtime_s": merge_runtime,
         "peak_gpu_memory_bytes": (
             int(torch.cuda.max_memory_allocated()) if torch.cuda.is_available() else None),
+        "peak_gpu_memory_scope": "merge_and_compaction_stage",
     })
     return merged_map
 

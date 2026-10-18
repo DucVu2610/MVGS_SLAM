@@ -1,0 +1,4 @@
+inherit_from:
+  - configs/ReplicaMultiagent/apart_0.yaml
+  - configs/magma/multiview_mode.yaml
+experiment_name: replica_apart_0_multiview

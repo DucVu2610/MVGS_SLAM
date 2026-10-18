@@ -18,6 +18,7 @@ from src.entities.loop_detection.feature_extractors import get_feature_extractor
 from src.entities.mapper import Mapper
 from src.entities.tracker import Tracker
 from src.utils.io_utils import save_dict_to_ckpt, save_dict_to_yaml
+from src.utils.dataset_utils import resolve_agent_input
 from src.utils.utils import (clone_obj, get_render_settings, np2torch,
                              ptcloud2numpy, render_gaussian_model, setup_seed,
                              torch2np, tensor_to_jpeg_bytes_cv2, depth_to_compressed_bytes)
@@ -44,7 +45,11 @@ class Agent(object):
 
         self.scene_name = config["data"]["scene_name"]
         self.dataset_name = config["dataset_name"]
-        agent_input_path = sorted(p for p in Path(config["data"]["input_path"]).glob("*") if not p.name.startswith("."))[self.agent_id]
+        agent_input_path = resolve_agent_input(
+            config["data"]["input_path"],
+            self.agent_id,
+            config["data"]["agent_ids"],
+        )
         self.config["data"]["input_path"] = str(agent_input_path)
         self.dataset = get_dataset(config["dataset_name"])({**self.config["data"], **self.config["cam"], **self.config["submap"]})
 

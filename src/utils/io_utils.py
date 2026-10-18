@@ -88,17 +88,49 @@ def merge_dicts(base_dict, additional_dict):
     return base_dict
 
 
-def load_config(path: str) -> dict:
+def _resolve_inherited_config(source_path: Path, inherited_path) -> Path:
+    inherited = Path(inherited_path).expanduser()
+    if inherited.is_absolute():
+        return inherited
+    repository_root = Path(__file__).resolve().parents[2]
+    candidates = (
+        source_path.parent / inherited,
+        repository_root / inherited,
+        Path.cwd() / inherited,
+    )
+    return next(
+        (candidate.resolve() for candidate in candidates if candidate.is_file()),
+        candidates[0].resolve(),
+    )
+
+
+def load_config(path: str, _loading=None) -> dict:
     """
     Loads a configuration file from the given path.
     Args:
         path: The path to the specific configuration file.
     """
-    with open(path, 'r') as f:
-        config = yaml.full_load(f)
-    if config.get('inherit_from'):
-        return merge_dicts(load_config(config['inherit_from']), config)
-    return config
+    source_path = Path(path).expanduser().resolve()
+    loading = set() if _loading is None else set(_loading)
+    if source_path in loading:
+        chain = " -> ".join(str(item) for item in [*loading, source_path])
+        raise ValueError(f"cyclic config inheritance: {chain}")
+    loading.add(source_path)
+    with source_path.open('r') as f:
+        config = yaml.safe_load(f) or {}
+    inherited = config.get('inherit_from')
+    if not inherited:
+        return config
+    inherited_paths = inherited if isinstance(inherited, list) else [inherited]
+    merged = {}
+    for inherited_path in inherited_paths:
+        resolved = _resolve_inherited_config(source_path, inherited_path)
+        if not resolved.is_file():
+            raise FileNotFoundError(
+                f"config {source_path} inherits missing file {inherited_path!r} "
+                f"(resolved to {resolved})")
+        merged = merge_dicts(merged, load_config(str(resolved), loading))
+    return merge_dicts(merged, config)
 
 
 def get_gpu_usage_by_id(gpu_id: int) -> tuple:

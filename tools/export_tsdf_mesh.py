@@ -12,13 +12,21 @@ import argparse
 import csv
 import json
 import re
+import sys
 import time
 import zipfile
+from collections import Counter
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import numpy as np
 import open3d as o3d
 import torch
+
+from src.utils.dataset_utils import resolve_agent_input
 
 
 def as_array(value, dtype=None):
@@ -142,29 +150,11 @@ def _resolve_data_root(slam_output, config):
         return configured
     candidates = [
         Path.cwd() / configured,
+        REPO_ROOT / configured,
         slam_output / configured,
         slam_output.parent / configured,
     ]
     return next((candidate for candidate in candidates if candidate.exists()), candidates[0])
-
-
-def _agent_input(data_root, agent_id, configured_agent_ids=None):
-    for name in (f"agent_{agent_id}", str(agent_id)):
-        direct = data_root / name
-        if direct.is_dir():
-            return direct
-    children = sorted(
-        path for path in data_root.iterdir()
-        if path.is_dir() and not path.name.startswith("."))
-    ordered_ids = [int(value) for value in (configured_agent_ids or [])]
-    position = (
-        ordered_ids.index(int(agent_id)) if int(agent_id) in ordered_ids
-        else int(agent_id)
-    )
-    if position >= len(children):
-        raise FileNotFoundError(
-            f"cannot resolve dataset input for agent {agent_id} below {data_root}")
-    return children[position]
 
 
 def export_tsdf(args):
@@ -265,7 +255,7 @@ def export_tsdf(args):
             **agent_config["submap"],
         }
         if not Path(dataset_config["input_path"]).exists():
-            dataset_config["input_path"] = str(_agent_input(
+            dataset_config["input_path"] = str(resolve_agent_input(
                 data_root, agent_id, config["data"]["agent_ids"]))
         dataset = get_dataset(config["dataset_name"])(dataset_config)
         for submap_index, submap in enumerate(submaps):
@@ -287,33 +277,82 @@ def export_tsdf(args):
             for local_index in offsets:
                 frame_id = frame_start + local_index
                 identity = (agent_id, frame_id)
-                if identity in seen or not 0 <= frame_id < len(dataset):
-                    continue
-                seen.add(identity)
-                _, rgb, depth, _unused_dataset_pose = dataset[frame_id]
-                color, depth_m = rgb_uint8(rgb), depth_float32(depth)
-                c2w = correction @ local_poses[local_index]
-                intrinsic = _camera_intrinsic(
-                    dataset, config["cam"], color.shape[1], color.shape[0])
-                rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
-                    o3d.geometry.Image(color),
-                    o3d.geometry.Image(depth_m),
-                    depth_scale=1.0,
-                    depth_trunc=float(args.depth_trunc),
-                    convert_rgb_to_intensity=False,
-                )
-                volume.integrate(rgbd, intrinsic, np.linalg.inv(c2w))
-                records.append({
+                record = {
                     "agent": agent_id,
                     "submap": submap_index,
                     "frame": frame_id,
-                    "valid_depth_pixels": int(np.count_nonzero(
-                        (depth_m > 0) & (depth_m <= float(args.depth_trunc)))),
-                })
+                    "status": "skipped",
+                    "reason": None,
+                    "valid_depth_pixels": 0,
+                }
+                if identity in seen:
+                    record["reason"] = "duplicate_agent_frame"
+                    records.append(record)
+                    continue
+                if not 0 <= frame_id < len(dataset):
+                    record["reason"] = "frame_out_of_dataset_range"
+                    records.append(record)
+                    continue
+                seen.add(identity)
+                try:
+                    _, rgb, depth, _unused_dataset_pose = dataset[frame_id]
+                    color, depth_m = rgb_uint8(rgb), depth_float32(depth)
+                    c2w = correction @ local_poses[local_index]
+                    if (not np.isfinite(c2w).all()
+                            or not np.allclose(c2w[3], [0, 0, 0, 1], atol=1e-5)
+                            or not np.allclose(
+                                c2w[:3, :3].T @ c2w[:3, :3],
+                                np.eye(3), atol=1e-3)
+                            or np.linalg.det(c2w[:3, :3]) <= 0):
+                        raise ValueError("invalid optimized rigid c2w pose")
+                    valid_depth = int(np.count_nonzero(
+                        (depth_m > 0) & (depth_m <= float(args.depth_trunc))))
+                    record["valid_depth_pixels"] = valid_depth
+                    if valid_depth == 0:
+                        record["reason"] = "no_valid_depth"
+                        records.append(record)
+                        continue
+                    intrinsic = _camera_intrinsic(
+                        dataset, agent_config["cam"],
+                        color.shape[1], color.shape[0])
+                    rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
+                        o3d.geometry.Image(color),
+                        o3d.geometry.Image(depth_m),
+                        depth_scale=1.0,
+                        depth_trunc=float(args.depth_trunc),
+                        convert_rgb_to_intensity=False,
+                    )
+                    volume.integrate(rgbd, intrinsic, np.linalg.inv(c2w))
+                    record["status"] = "integrated"
+                    records.append(record)
+                except Exception as error:
+                    record["reason"] = f"{type(error).__name__}:{error}"
+                    records.append(record)
 
     mesh = clean_mesh(
         volume.extract_triangle_mesh(), int(args.min_component_triangles))
     if not len(mesh.vertices) or not len(mesh.triangles):
+        with records_path.open("w", newline="") as handle:
+            writer = csv.DictWriter(
+                handle, fieldnames=[
+                    "agent", "submap", "frame", "status", "reason",
+                    "valid_depth_pixels",
+                ])
+            writer.writeheader()
+            writer.writerows(records)
+        skipped = [record for record in records if record["status"] == "skipped"]
+        stats_path.write_text(json.dumps({
+            **params,
+            "status": "failed",
+            "failure_reason": "empty_tsdf_mesh",
+            "attempted_frames": len(records),
+            "integrated_frames": sum(
+                record["status"] == "integrated" for record in records),
+            "skipped_frames": len(skipped),
+            "skip_reasons": dict(sorted(Counter(
+                record["reason"] or "unspecified" for record in skipped
+            ).items())),
+        }, indent=2))
         raise RuntimeError("TSDF produced an empty mesh")
     if not o3d.io.write_triangle_mesh(
             str(mesh_path), mesh, write_ascii=False, compressed=True):
@@ -329,14 +368,27 @@ def export_tsdf(args):
 
     with records_path.open("w", newline="") as handle:
         writer = csv.DictWriter(
-            handle, fieldnames=["agent", "submap", "frame", "valid_depth_pixels"])
+            handle, fieldnames=[
+                "agent", "submap", "frame", "status", "reason",
+                "valid_depth_pixels",
+            ])
         writer.writeheader()
         writer.writerows(records)
     bounds = mesh.get_axis_aligned_bounding_box()
+    integrated_records = [
+        record for record in records if record["status"] == "integrated"]
+    skipped_records = [
+        record for record in records if record["status"] == "skipped"]
     stats = {
         **params,
+        "status": "completed",
         "input_root": str(data_root),
-        "integrated_frames": len(records),
+        "attempted_frames": len(records),
+        "integrated_frames": len(integrated_records),
+        "skipped_frames": len(skipped_records),
+        "skip_reasons": dict(sorted(Counter(
+            record["reason"] or "unspecified" for record in skipped_records
+        ).items())),
         "vertices": len(mesh.vertices),
         "triangles": len(mesh.triangles),
         "preview_vertices": len(preview.vertices),

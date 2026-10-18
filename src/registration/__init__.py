@@ -16,6 +16,7 @@ from .landmark_selection import (
     select_spatially_balanced_landmarks,
     select_spatially_covered_correspondences,
 )
+from .multiview_descriptor import descriptor_cache_key
 
 __all__ = [
     "estimate_rigid_transform",
@@ -27,4 +28,5 @@ __all__ = [
     "register_gaussian_landmarks",
     "select_spatially_balanced_landmarks",
     "select_spatially_covered_correspondences",
+    "descriptor_cache_key",
 ]

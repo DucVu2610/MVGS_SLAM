@@ -1,0 +1,19 @@
+submap:
+  registration_method: fpfh
+  fallback_to_fpfh: true
+
+registration:
+  descriptor_mode: baseline
+  reliability_mode: paper
+  fallback_to_fpfh: true
+
+global_compaction:
+  enabled: false
+
+export:
+  tsdf:
+    enabled: false
+
+runtime:
+  server_gpu: 0
+  strict_gpu_mapping: false

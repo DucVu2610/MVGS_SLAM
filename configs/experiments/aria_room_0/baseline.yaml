@@ -1,0 +1,4 @@
+inherit_from:
+  - configs/AriaMultiagent/room0_baseline.yaml
+  - configs/magma/baseline_mode.yaml
+experiment_name: aria_room_0_baseline

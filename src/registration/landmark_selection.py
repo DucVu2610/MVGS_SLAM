@@ -11,8 +11,9 @@ def landmark_reliability(
     mean_depth_residual,
     opacity,
     depth_temperature_m: float,
+    mode: str = "paper",
 ):
-    """Compute a bounded, monotonic reliability score.
+    """Compute landmark reliability using the paper or legacy formula.
 
     Opacity is applied once at landmark level.  It is deliberately not part of
     the per-view descriptor aggregation weights because multiplying every view
@@ -25,9 +26,21 @@ def landmark_reliability(
     tau = float(depth_temperature_m)
     if tau <= 0:
         raise ValueError("depth_temperature_m must be positive")
-    observation_term = 1.0 - np.exp(-np.maximum(observations, 0.0) / 2.0)
-    residual_term = np.exp(-np.maximum(residual, 0.0) / tau)
-    return stability * observation_term * residual_term * opacity
+    mode = str(mode).lower()
+    observations = np.maximum(observations, 0.0)
+    residual = np.maximum(residual, 0.0)
+    if mode == "paper":
+        return (
+            stability
+            * np.log1p(observations)
+            * (0.5 + 0.5 * opacity)
+            / (1.0 + residual / tau)
+        )
+    if mode == "legacy_exp":
+        observation_term = 1.0 - np.exp(-observations / 2.0)
+        residual_term = np.exp(-residual / tau)
+        return stability * observation_term * residual_term * opacity
+    raise ValueError("reliability_mode must be 'paper' or 'legacy_exp'")
 
 
 def select_spatially_balanced_landmarks(

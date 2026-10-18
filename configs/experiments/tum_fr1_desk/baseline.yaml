@@ -1,0 +1,4 @@
+inherit_from:
+  - configs/TUM_RGBD/rgbd_dataset_freiburg1_desk.yaml
+  - configs/magma/baseline_mode.yaml
+experiment_name: tum_fr1_desk_baseline

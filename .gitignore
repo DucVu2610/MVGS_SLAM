@@ -1,20 +1,39 @@
-*.pyc
-.vscode
-output
-build
-diff_rasterization/diff_rast.egg-info
-diff_rasterization/dist
-tensorboard_3d
-screenshots
-debug
-wandb
-data
-ideas
-debug_scripts.txt
-*.sh
-alex.pth
-dinov2-small/
-gaussian_rasterizer-1.0.0-cp311-cp311-linux_x86_64.whl
+# Python/test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments and builds
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+*.whl
+
+# Datasets, model weights, and generated SLAM artifacts
+data/
+output/
+outputs/
 logs/
-reqs.txt
-simple_knn-0.0.0-cp311-cp311-linux_x86_64.whl
+wandb/
+*.ckpt
+*.pt
+*.pth
+*.ply
+*.zip
+*.log
+
+# Downloaded models and visualization/debug output
+dinov2-small/
+tensorboard_3d/
+screenshots/
+debug/
+ideas/
+debug_scripts.txt
+
+# Editor files
+.vscode/

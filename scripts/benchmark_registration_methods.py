@@ -31,6 +31,7 @@ from src.utils.benchmark_utils import (
     load_candidate_identities,
     resolve_gaussian_registration_options,
 )
+from src.utils.dataset_utils import resolve_agent_input
 from src.utils.magic_slam_utils import Registration, register_submaps_depth
 from src.utils.utils import setup_seed
 
@@ -116,20 +117,16 @@ def load_run(run_dir):
 
 def load_datasets(config):
     input_root = Path(config["data"]["input_path"])
-    agent_paths = sorted(path for path in input_root.glob("*") if not path.name.startswith("."))
     agent_ids = config["data"]["agent_ids"]
-    if len(agent_paths) < len(agent_ids):
-        raise FileNotFoundError(
-            f"Expected at least {len(agent_ids)} agent directories under {input_root}")
-
     datasets = {}
     dataset_class = get_dataset(config["dataset_name"])
-    for index, agent_id in enumerate(agent_ids):
+    for agent_id in agent_ids:
         dataset_config = {
             **config["data"],
             **config["cam"],
             **config["submap"],
-            "input_path": str(agent_paths[index]),
+            "input_path": str(resolve_agent_input(
+                input_root, int(agent_id), agent_ids)),
         }
         datasets[agent_id] = dataset_class(dataset_config)
     return datasets

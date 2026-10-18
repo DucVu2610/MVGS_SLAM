@@ -1,128 +1,72 @@
-# MAGMA-SLAM
+# MVGS-SLAM
 
-**Multi-View Gaussian Map Alignment for Collaborative Multi-Agent SLAM**
+Production repository for multi-agent Gaussian SLAM with MAGiC-SLAM
+baseline, Single-view and Multi-view registration, point-to-plane ICP,
+optional Gaussian compaction, and optional colored TSDF export.
 
-MAGMA-SLAM extends the MAGiC-SLAM codebase while retaining its local Gaussian
-mapping, DINO loop-candidate retrieval, and GTSAM pose-graph backend. The new
-registration path assigns view-aggregated DINO descriptors to Gaussian
-landmarks, matches Gaussian-to-Gaussian, applies geometric consistency and
-Kabsch/RANSAC, then refines every viable loop with point-to-plane ICP before
-loop admission and pose-graph optimization.
+## Installation
 
-The original output names remain available, including `merged_coarse.ply`,
-`merged_refined.ply`, loop pickle files, rendering metrics, and wall-time
-statistics. Old configs without a `registration` section continue through the
-legacy path.
-
-## Registration modes
-
-`registration.descriptor_mode` accepts:
-
-- `baseline`: inherited MAGiC-SLAM registration behavior;
-- `single`: best valid observation per selected Gaussian;
-- `multiview`: depth-weighted aggregation across at least two valid views.
-
-Opacity contributes to landmark reliability/selection, not to each view's
-descriptor weight. No ground-truth pose is used by matching, RANSAC, ICP, or
-loop admission.
-
-## Office-0 runs
-
-Replace the input and output paths with local paths. The input directory must
-have the same per-agent layout used by the existing Replica loader.
-
-Baseline MAGiC-SLAM:
+The environment targets Python 3.11, PyTorch 2.5.1, torchvision 0.20.1 and
+NumPy 1.26.4.
 
 ```bash
-python run_slam.py configs/magma/baseline_magic.yaml \
-  --input_path /path/to/ReplicaMultiagent/Office-0 \
-  --output_path output/magma/office0/baseline/seed_0 --seed 0
+python -m pip install -r requirements.txt
+python scripts/install_cuda_extensions.py --check-only
+python scripts/install_cuda_extensions.py
 ```
 
-Single-view Gaussian-to-Gaussian:
+The CUDA installer checks `torch.version.cuda` against `nvcc` before building
+the pinned `gaussian_rasterizer` and `simple_knn` extensions.
+
+## Run SLAM
+
+Each supported scene under `configs/experiments/` provides `baseline.yaml`,
+`single.yaml` and `multiview.yaml`.
 
 ```bash
-python run_slam.py configs/magma/magma_single.yaml \
-  --input_path /path/to/ReplicaMultiagent/Office-0 \
-  --output_path output/magma/office0/single/seed_0 --seed 0
+python run_slam.py configs/experiments/replica_office_0/baseline.yaml \
+  --input_path /data/ReplicaMultiagent/Office-0 \
+  --output_path /outputs/office0/baseline --seed 0
+
+python run_slam.py configs/experiments/replica_office_0/single.yaml \
+  --input_path /data/ReplicaMultiagent/Office-0 \
+  --output_path /outputs/office0/single --seed 0
+
+python run_slam.py configs/experiments/replica_office_0/multiview.yaml \
+  --input_path /data/ReplicaMultiagent/Office-0 \
+  --output_path /outputs/office0/multiview --seed 0
 ```
 
-Multi-view MAGMA-SLAM:
+Available scene directories are `replica_office_0`, `replica_apart_0`,
+`replica_apart_1`, `replica_apart_2`, `tum_fr1_desk`, `aria_room_0` and
+`aria_room_1`. Add `--multi_gpu` for multi-process GPU execution. Explicit GPU
+assignment can be configured as:
+
+```yaml
+runtime:
+  server_gpu: 0
+  agent_gpu_map: {0: 0, 1: 1, 2: 1}
+  strict_gpu_mapping: false
+```
+
+## Optional production outputs
+
+Enable Gaussian compaction:
 
 ```bash
-python run_slam.py configs/magma/magma_multiview.yaml \
-  --descriptor_mode multiview \
-  --input_path /path/to/ReplicaMultiagent/Office-0 \
-  --output_path output/magma/office0/multiview/seed_0 --seed 0
+python run_slam.py <config.yaml> --enable_global_compaction
 ```
 
-Point-to-plane ICP is enabled with
-`registration.refinement: point_to_plane_icp`; its threshold, iteration limit,
-and admission gate are in `configs/magma/magma_multiview.yaml`.
-
-Enable post-PGO Gaussian compaction without modifying the YAML:
+Enable post-SLAM TSDF export and ZIP packaging:
 
 ```bash
-python run_slam.py configs/magma/magma_multiview.yaml \
-  --descriptor_mode multiview --enable_global_compaction \
-  --input_path /path/to/ReplicaMultiagent/Office-0 \
-  --output_path output/magma/office0/multiview_compact/seed_0 --seed 0
+python run_slam.py <config.yaml> --enable_tsdf_export --tsdf_zip
 ```
 
-## Ablations
-
-The landmark budgets requested by the benchmark are exposed directly:
+Export TSDF from an existing completed run:
 
 ```bash
-python run_slam.py configs/magma/magma_multiview.yaml \
-  --descriptor_mode multiview --max_landmarks 256 \
-  --ambiguity_margin 0.0 --geometric_consistency distance \
-  --input_path /path/to/ReplicaMultiagent/Office-0 \
-  --output_path output/magma/office0/ablation_k256/seed_0 --seed 0
+python tools/export_tsdf_mesh.py --slam-output /outputs/completed_run --zip
 ```
 
-Use `--max_landmarks 256`, `512`, or `1024`; compare `single` and `multiview`;
-and select `none`, `distance`, `distance_scale`, or
-`distance_scale_relative_axis` for geometric consistency.
-
-For a paired offline benchmark on the exact retrieved loops and finalized
-submaps from one completed run:
-
-```bash
-python tools/benchmark/benchmark_single_multi.py \
-  --run-dir output/magma/office0/multiview/seed_0 \
-  --k 256 512 1024 --seeds 0 1 2 \
-  --ambiguity-margins 0.0 0.01 \
-  --geometries distance distance_scale_relative_axis
-```
-
-This command does not rerun loop retrieval. Descriptor/dense cache-build
-times are logged separately from matcher and ICP time; multi-seed benchmark
-time is never added to full-pipeline runtime.
-
-## Colored TSDF export
-
-TSDF is a post-SLAM export and does not replace the Gaussian map:
-
-```bash
-python tools/export_tsdf_mesh.py \
-  --slam-output output/magma/office0/multiview/seed_0 \
-  --voxel-size 0.01 --sdf-trunc 0.04 --depth-trunc 5.0 \
-  --frame-stride 2 --min-component-triangles 1000 --zip
-```
-
-The exporter reconstructs every global camera pose from optimized submap-start
-poses and local submap trajectories. It never reads a dataset pose for fusion.
-Set `export.tsdf.enabled: true` to invoke the same exporter only after the full
-pipeline has saved optimized poses and final maps.
-
-## Tests
-
-```bash
-python -m pytest -q tests/test_magma_registration.py \
-  tests/test_magma_backend_and_tsdf.py tests/test_version_migration.py
-```
-
-See [method changes](docs/METHOD_CHANGES.md) and
-[version migration](docs/VERSION_MIGRATION.md) for the notebook audit, and
-[output formats](docs/OUTPUT_FORMAT.md) for implementation details.
+Use `python run_slam.py --help` for all runtime overrides.

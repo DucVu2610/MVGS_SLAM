@@ -12,6 +12,7 @@ from .geometric_consistency import pairwise_rigidity_consistency
 from .landmark_selection import select_spatially_covered_correspondences
 from .multiview_descriptor import (
     build_gaussian_landmark_descriptors,
+    descriptor_cache_key,
     points_in_camera_frame,
 )
 
@@ -578,13 +579,8 @@ def register_gaussian_landmarks(
     cache = cache if cache is not None else {}
 
     def landmarks(submap, dataset):
-        cache_key = (
-            id(submap),
-            int(options.get("max_landmarks", options.get("gaussian_max_landmarks", 512))),
-            int(options.get("min_observations", 2)),
-            float(options.get("gaussian_min_opacity", 0.05)),
-            float(options.get("gaussian_depth_tolerance_m", 0.05)),
-        )
+        cache_key = descriptor_cache_key(
+            submap, dataset, feature_extractor, options)
         if cache_key not in cache:
             cache[cache_key] = build_gaussian_landmark_descriptors(
                 submap, dataset, feature_extractor, "multiview", options)

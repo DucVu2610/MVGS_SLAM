@@ -1,0 +1,4 @@
+inherit_from:
+  - configs/TUM_RGBD/rgbd_dataset_freiburg1_desk.yaml
+  - configs/magma/single_mode.yaml
+experiment_name: tum_fr1_desk_single

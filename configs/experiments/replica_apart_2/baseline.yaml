@@ -1,0 +1,4 @@
+inherit_from:
+  - configs/ReplicaMultiagent/apart_2_baseline.yaml
+  - configs/magma/baseline_mode.yaml
+experiment_name: replica_apart_2_baseline

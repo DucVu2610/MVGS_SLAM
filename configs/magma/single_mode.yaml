@@ -1,0 +1,4 @@
+inherit_from: configs/magma/multiview_mode.yaml
+
+registration:
+  descriptor_mode: single

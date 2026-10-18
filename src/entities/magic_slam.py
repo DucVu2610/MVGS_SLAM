@@ -36,10 +36,29 @@ class MAGiCSLAM(object):
         self.multi_gpu = self.config["multi_gpu"]
         self.scene_name = self.config["data"]["scene_name"]
         self.agent_ids = np.array(self.config["data"]["agent_ids"])
+        runtime_config = self.config.setdefault("runtime", {})
+        self.server_gpu = int(runtime_config.get("server_gpu", 0))
         self.agent_gpu_ids = (
-            build_agent_gpu_map(self.agent_ids, torch.cuda.device_count())
+            build_agent_gpu_map(
+                self.agent_ids,
+                torch.cuda.device_count(),
+                server_gpu=self.server_gpu,
+                explicit_map=runtime_config.get("agent_gpu_map"),
+                strict=bool(runtime_config.get("strict_gpu_mapping", False)),
+            )
             if self.multi_gpu else {}
         )
+        if self.multi_gpu:
+            torch.cuda.set_device(self.server_gpu)
+        runtime_config.update({
+            "resolved_server_gpu": self.server_gpu if self.multi_gpu else None,
+            "resolved_agent_gpu_map": self.agent_gpu_ids,
+            "visible_gpu_count": int(torch.cuda.device_count()),
+            "gpu_mapping_source": (
+                "explicit" if runtime_config.get("agent_gpu_map") is not None
+                else "automatic"
+            ) if self.multi_gpu else "single_process",
+        })
         self.agents_submaps = {agent_id: [] for agent_id in self.agent_ids}
         self.agents_messages = {agent_id: {} for agent_id in self.agent_ids}
         self.run_info = self._init_wandb()
@@ -98,6 +117,17 @@ class MAGiCSLAM(object):
         options = self.config.get("export", {}).get("tsdf", {})
         if not options.get("enabled", False):
             return
+        missing = []
+        for agent_id in self.agent_ids:
+            agent_output = self.output_path / f"agent_{int(agent_id)}"
+            for name in ("optimized_kf_c2w.ckpt", "kf_ids.ckpt"):
+                path = agent_output / name
+                if not path.is_file():
+                    missing.append(str(path))
+        if missing:
+            raise RuntimeError(
+                "TSDF auto-export requires successfully saved optimized poses; "
+                f"missing={missing}")
         exporter = Path(__file__).resolve().parents[2] / "tools" / "export_tsdf_mesh.py"
         command = [
             sys.executable, str(exporter),
@@ -108,6 +138,8 @@ class MAGiCSLAM(object):
             "--frame-stride", str(options.get("frame_stride", 2)),
             "--min-component-triangles", str(
                 options.get("min_component_triangles", 1000)),
+            "--preview-triangles", str(
+                options.get("preview_triangles", 300000)),
         ]
         if options.get("zip", False):
             command.append("--zip")
@@ -273,7 +305,7 @@ class MAGiCSLAM(object):
             for submap in agent_submaps:
                 agents_kf_ids[agent_id] = np.concatenate([agents_kf_ids[agent_id], submap["keyframe_ids"]])
             agents_kf_ids[agent_id] = agents_kf_ids[agent_id].astype(int)
-        opt_args = self.agents[0].mapper.opt
+        opt_args = self.agents[int(self.agent_ids[0])].mapper.opt
 
         compaction_options = dict(self.config.get("global_compaction", {}))
         total_merge_time = 0
@@ -312,8 +344,7 @@ class MAGiCSLAM(object):
         print(f"Total merge time: {total_merge_time}")
 
         if self.config["multi_gpu"]:  # Logging GPU usage makes sense only in multi-GPU mode
-            # GPU:0 is used by the server
-            self.logger.log_gpu_usage(0)
+            self.logger.log_gpu_usage(self.server_gpu)
 
         save_dict_to_json({
             "registration_time": registration_time,

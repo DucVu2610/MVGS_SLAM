@@ -47,6 +47,18 @@ def get_args():
     parser.add_argument(
         '--disable_global_compaction', action='store_true',
         help='Disable post-PGO Gaussian compaction')
+    parser.add_argument(
+        '--reliability_mode', choices=['paper', 'legacy_exp'],
+        help='Landmark reliability formula (paper is the production default)')
+    parser.add_argument(
+        '--enable_tsdf_export', action='store_true',
+        help='Export a colored TSDF mesh after the completed SLAM run')
+    parser.add_argument(
+        '--disable_tsdf_export', action='store_true',
+        help='Disable post-SLAM TSDF export')
+    parser.add_argument(
+        '--tsdf_zip', action='store_true',
+        help='ZIP TSDF artifacts when post-SLAM export is enabled')
     return parser.parse_args()
 
 
@@ -81,6 +93,9 @@ def update_config_with_args(config, args):
     if getattr(args, "geometric_consistency", None):
         config.setdefault("registration", {})["geometric_consistency"] = (
             args.geometric_consistency)
+    if getattr(args, "reliability_mode", None):
+        config.setdefault("registration", {})["reliability_mode"] = (
+            args.reliability_mode)
     if args.registration_device:
         config["submap"]["registration_device"] = args.registration_device
     if args.registration_weights_path:
@@ -97,6 +112,17 @@ def update_config_with_args(config, args):
         config.setdefault("global_compaction", {})["enabled"] = True
     if disable_compaction:
         config.setdefault("global_compaction", {})["enabled"] = False
+    enable_tsdf = getattr(args, "enable_tsdf_export", False)
+    disable_tsdf = getattr(args, "disable_tsdf_export", False)
+    if enable_tsdf and disable_tsdf:
+        raise ValueError("TSDF export cannot be both enabled and disabled")
+    tsdf_config = config.setdefault("export", {}).setdefault("tsdf", {})
+    if enable_tsdf:
+        tsdf_config["enabled"] = True
+    if disable_tsdf:
+        tsdf_config["enabled"] = False
+    if getattr(args, "tsdf_zip", False):
+        tsdf_config["zip"] = True
     return config
 
 
@@ -110,6 +136,12 @@ def validate_registration_config(config):
         raise ValueError(
             "registration.descriptor_mode must be baseline, single, or multiview")
     registration_config["descriptor_mode"] = descriptor_mode
+    reliability_mode = str(
+        registration_config.get("reliability_mode", "paper")).lower()
+    if reliability_mode not in {"paper", "legacy_exp"}:
+        raise ValueError(
+            "registration.reliability_mode must be paper or legacy_exp")
+    registration_config["reliability_mode"] = reliability_mode
     if descriptor_mode in {"single", "multiview"}:
         submap_config["registration_method"] = "gaussian_landmark"
     method = submap_config.get("registration_method", "fpfh").lower()
@@ -134,6 +166,9 @@ def validate_registration_config(config):
     submap_config.setdefault("registration_options", {})
     registration_config.setdefault(
         "fallback_to_fpfh", submap_config["fallback_to_fpfh"])
+    config.setdefault("global_compaction", {}).setdefault("enabled", False)
+    config.setdefault("export", {}).setdefault("tsdf", {}).setdefault(
+        "enabled", False)
     return config
 
 

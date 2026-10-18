@@ -1,0 +1,4 @@
+inherit_from:
+  - configs/ReplicaMultiagent/office_0.yaml
+  - configs/magma/single_mode.yaml
+experiment_name: replica_office_0_single

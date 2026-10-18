@@ -1,0 +1,4 @@
+inherit_from:
+  - configs/ReplicaMultiagent/office_0_baseline.yaml
+  - configs/magma/baseline_mode.yaml
+experiment_name: replica_office_0_baseline

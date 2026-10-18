@@ -157,13 +157,21 @@ def plot_agents_pose_graph(agents_poses: dict, gt_poses: list,
     agent_colors = ["orange", "yellow-green", "pink", "cyan", "red"]
     agent_gt_colors = ["blue", "purple", "gray", "brown", "green"]
     _, ax = plt.subplots()
-    for agent_id in sorted(agents_poses.keys()):
+    for color_index, agent_id in enumerate(sorted(agents_poses.keys())):
         ax = plot_trajectory(agents_poses[agent_id][:, :3, 3], ax=ax,
-                             color=COLORS_MATPLOTLIB[agent_colors[agent_id]], label=f"Agent {agent_id} estimated")
+                             color=COLORS_MATPLOTLIB[
+                                 agent_colors[color_index % len(agent_colors)]],
+                             label=f"Agent {agent_id} estimated")
 
-    for agent_id in range(len(gt_poses)):
-        ax = plot_trajectory(gt_poses[agent_id][:, :3, 3], ax=ax,
-                             color=COLORS_MATPLOTLIB[agent_gt_colors[agent_id]], label=f"Agent {agent_id} ground-truth")
+    gt_items = (
+        sorted(gt_poses.items()) if isinstance(gt_poses, dict)
+        else list(enumerate(gt_poses))
+    )
+    for color_index, (agent_id, poses) in enumerate(gt_items):
+        ax = plot_trajectory(poses[:, :3, 3], ax=ax,
+                             color=COLORS_MATPLOTLIB[
+                                 agent_gt_colors[color_index % len(agent_gt_colors)]],
+                             label=f"Agent {agent_id} ground-truth")
 
     no_label = True
     for inter_loop in inter_loops:

@@ -1,0 +1,4 @@
+inherit_from:
+  - configs/AriaMultiagent/room0.yaml
+  - configs/magma/multiview_mode.yaml
+experiment_name: aria_room_0_multiview

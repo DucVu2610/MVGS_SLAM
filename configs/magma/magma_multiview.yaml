@@ -12,6 +12,7 @@ submap:
 
 registration:
   descriptor_mode: multiview  # baseline | single | multiview
+  reliability_mode: paper     # paper | legacy_exp
   max_landmarks: 512
   min_observations: 2
   gaussian_min_opacity: 0.05

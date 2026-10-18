@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections import Counter
-from pathlib import Path
-
 import numpy as np
+
+from src.utils.dataset_utils import resolve_agent_input
 
 
 def find_submap_index(submaps, frame_id: int) -> int:
@@ -19,26 +19,6 @@ def find_submap_index(submaps, frame_id: int) -> int:
         raise KeyError(
             f"frame {frame_id} maps to {len(matches)} finalized submaps")
     return matches[0]
-
-
-def resolve_agent_input(data_root, agent_id: int, configured_agent_ids):
-    """Resolve named or positional agent folders, including non-contiguous IDs."""
-    root = Path(data_root)
-    for name in (f"agent_{int(agent_id)}", str(int(agent_id))):
-        candidate = root / name
-        if candidate.is_dir():
-            return candidate
-    children = sorted(
-        path for path in root.iterdir()
-        if path.is_dir() and not path.name.startswith("."))
-    ids = [int(value) for value in configured_agent_ids]
-    if int(agent_id) not in ids:
-        raise KeyError(f"agent {agent_id} is not listed in data.agent_ids")
-    position = ids.index(int(agent_id))
-    if position >= len(children):
-        raise FileNotFoundError(
-            f"agent {agent_id} has no dataset folder below {root}")
-    return children[position]
 
 
 def validate_finalized_pose_ids(submaps, saved_keyframe_ids, optimized_poses, label=""):

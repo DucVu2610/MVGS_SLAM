@@ -15,6 +15,64 @@ from .landmark_selection import (
 )
 
 
+def _hashable_sequence(value):
+    tensor = torch.as_tensor(value).detach().cpu().reshape(-1)
+    return tuple(int(item) for item in tensor.tolist())
+
+
+def descriptor_cache_key(submap, dataset, feature_extractor, options=None):
+    """Return a complete in-memory cache signature for landmark descriptors.
+
+    Descriptor mode is intentionally excluded: Single and Multi select from
+    one shared master cache and differ only in which descriptor tensor is read.
+    """
+    options = options or {}
+    extractor_config = getattr(feature_extractor, "config", {}) or {}
+    dataset_config = getattr(dataset, "dataset_config", {}) or {}
+    model_config = getattr(getattr(feature_extractor, "model", None), "config", None)
+    patch_size = getattr(model_config, "patch_size", None)
+    if isinstance(patch_size, list):
+        patch_size = tuple(patch_size)
+    dataset_path = getattr(
+        dataset, "dataset_path", dataset_config.get("input_path", ""))
+    preserves_fov = bool(getattr(
+        feature_extractor, "dino_patch_preserve_aspect_ratio",
+        extractor_config.get("dino_patch_preserve_aspect_ratio", True)))
+    preprocessing_mode = str(options.get(
+        "preprocessing_mode",
+        "geometry_preserving_full_fov" if preserves_fov
+        else "legacy_center_crop",
+    ))
+    return (
+        "gaussian_landmark_descriptor_cache_v2",
+        id(submap),
+        int(submap.get("agent_id", dataset_config.get("agent_id", -1))),
+        int(submap["submap_start_frame_id"]),
+        int(submap["submap_end_frame_id"]),
+        _hashable_sequence(submap["keyframe_ids"]),
+        str(dataset_path),
+        int(options.get("max_landmarks", options.get("gaussian_max_landmarks", 512))),
+        int(options.get("min_observations", 2)),
+        float(options.get("gaussian_min_opacity", 0.05)),
+        float(options.get("gaussian_depth_tolerance_m", 0.05)),
+        float(options.get("depth_weight_temperature_m", 0.05)),
+        float(options.get("landmark_voxel_size_m", 0.05)),
+        str(options.get("reliability_mode", "paper")).lower(),
+        type(feature_extractor).__qualname__,
+        str(getattr(feature_extractor, "weights_path", extractor_config.get("weights_path", ""))),
+        int(getattr(feature_extractor, "embed_size", extractor_config.get("embed_size", -1))),
+        preprocessing_mode,
+        preserves_fov,
+        int(getattr(
+            feature_extractor, "dino_patch_short_edge",
+            extractor_config.get("dino_patch_short_edge", 280))),
+        bool(extractor_config.get("dino_use_fast", False)),
+        patch_size,
+        int(getattr(dataset, "height", dataset_config.get("H", -1))),
+        int(getattr(dataset, "width", dataset_config.get("W", -1))),
+    )
+
+
 def _rgb_image(value) -> Image.Image:
     if isinstance(value, Image.Image):
         return value.convert("RGB")
@@ -234,6 +292,7 @@ def build_gaussian_landmark_descriptors(
     min_opacity = float(options.get("gaussian_min_opacity", 0.05))
     depth_tolerance = float(options.get("gaussian_depth_tolerance_m", 0.05))
     temperature = float(options.get("depth_weight_temperature_m", 0.05))
+    reliability_mode = str(options.get("reliability_mode", "paper")).lower()
     max_landmarks = int(options.get(
         "max_landmarks", options.get("gaussian_max_landmarks", 512)))
     # V3.3.1 compares descriptors, not landmark availability: single-best and
@@ -321,6 +380,7 @@ def build_gaussian_landmark_descriptors(
         mean_residual.cpu().numpy(),
         opacity[eligible_indices].cpu().numpy(),
         temperature,
+        mode=reliability_mode,
     )
     selected_local = select_spatially_balanced_landmarks(
         xyz[eligible_indices].cpu().numpy(),
@@ -362,6 +422,7 @@ def build_gaussian_landmark_descriptors(
                 mean_residual[selected_local_tensor].mean().item()),
             "mean_descriptor_stability": float(
                 stability_all[selected_local_tensor].mean().item()),
+            "reliability_mode": reliability_mode,
         },
     }
     result["descriptors"] = result[
